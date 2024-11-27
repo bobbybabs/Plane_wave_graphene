@@ -9,6 +9,9 @@ vf = 6.582  # eV Ang
 waa = 0.09  # eV
 wab = 0.117
 
+t = 2 * vf / np.sqrt(3) / a0
+print(t)
+
 s0 = np.array([[1, 0], [0, 1]])
 sx = np.array([[0, 1], [1, 0]])
 sy = np.array([[0, -1j], [1j, 0]])
@@ -33,15 +36,20 @@ def rot(theta):
 
 
 class TwistGraphite(object):
-    def __init__(self, theta=1.1) -> None:
+    def __init__(self, theta=1.1, q=1) -> None:
         self.am = a0 / (theta / 180 * pi)
-        self.icell = (
+        self.icell_init = (
             4
             * pi
             / (3 * self.am)
             * np.array(([[sqrt(3) / 2, 1 / 2], [sqrt(3) / 2, -1 / 2]]))
         )
-        self.cell = 2 * np.pi * np.linalg.inv(self.icell).T
+        self.cell_init = 2 * np.pi * np.linalg.inv(self.icell_init).T
+
+        self.cell = np.array([q * self.cell_init[0], self.cell_init[1]])
+        self.icell = 2 * np.pi * np.linalg.inv(self.cell).T
+
+        self.q = q
 
     def init_mesh(self, ecut=1, N=100, epsilon=1e-6):
 
@@ -76,45 +84,84 @@ class TwistGraphite(object):
         self.N = len(G)
         self.g = [g1, g2, g3]
 
-        self.M = self.indx.max() - self.indx.min() + 1
+        self.gm = g2 / self.q
+        self.gm_indx = []
+        for i in range(100):
+            indx = np.where(
+                np.linalg.norm(dG + (i + 1) * self.gm[None, None, :], axis=-1) < epsilon
+            )
+            if len(indx[0]) == 0:
+                break
+            else:
+                self.gm_indx.append(indx)
 
-        self.r = np.array(np.meshgrid(np.fft.fftfreq(self.M), np.fft.fftfreq(self.M)))
-        self.r = self.r.transpose((1, 2, 0)).dot(self.cell)
+        self.M = self.indx.max() - self.indx.min() + 1
+        print(self.M)
+        self.r = np.array(
+            np.meshgrid(np.fft.fftfreq(self.M), np.fft.fftfreq(self.q * self.M))
+        )
+        self.r = self.r.transpose((1, 2, 0))
         self.r = self.r.transpose((2, 0, 1))
 
-    def plot_mesh(self):
+    def plot_mesh(self, c=None):
 
         plt.figure()
-        plt.scatter(self.G[:, 0], self.G[:, 1])
-        for c, g in zip(["black", "red", "blue"], self.g):
-            plt.quiver(0, 0, g[0], g[1], color=c, scale=1, scale_units="xy")
+        plt.scatter(
+            self.G[:, 0],
+            self.G[:, 1],
+            c=c,
+            cmap="coolwarm",
+        )
+        if c is not None:
+            plt.colorbar()
+        else:
+            for c, g in zip(["black", "red", "blue"], self.g):
+                plt.quiver(0, 0, g[0], g[1], color=c, scale=1, scale_units="xy")
+
+            plt.quiver(
+                0,
+                0,
+                self.gm[0][0],
+                self.gm[0][1],
+                color="purple",
+                scale=1,
+                scale_units="xy",
+            )
         plt.axis("equal")
         plt.show()
 
-    def hamiltonian(self, k=[0, 0], kz=0):
+    def hamiltonian(self, k=[0, 0], kz=0, p=1):
 
         kG = k + self.G
         H = np.zeros((self.N, self.N, 2, 2), dtype=complex)
 
         # --------------Add Hkin matrix----------------
         for i in range(self.N):
-            H[i, i] += vf * kG[i, 0] * sx
-            H[i, i] += vf * kG[i, 1] * sy
+            H[i, i] += vf * (kG[i, 0] * sx + kG[i, 1] * sy)
 
         # #    #--------------Cacluating the potential Delta--------------
-        for j, indx in enumerate(self.g_indx):
+        # for j, indx in enumerate(self.g_indx):
+        #     for a, b in zip(*indx):
+        #         h = T[j] * np.exp(2j * pi * kz)
+        #         H[a, b] += h
+        #         H[b, a] += h.T.conj()
+        for j, indx in enumerate(self.gm_indx):
             for a, b in zip(*indx):
-                H[a, b] = T[j] * np.exp(2j * pi * kz)
-                H[b, a] = H[a, b].T.conj()
+                h = p / (j + 1) * vf * (self.gm[0] * sx + self.gm[1] * sy).T.conj()
+                H[a, b] += h
+                H[b, a] += h.T.conj()
 
         H = H.transpose((0, 2, 1, 3)).reshape((2 * self.N, 2 * self.N))
         return H
 
-    def plot_bandstructure(self, path="KGBAK", npoints=120, kz=0, ax=None):
+    def plot_bandstructure(self, path="KGBAK", npoints=120, kz=0, ax=None, p=0):
 
-        a = 2.46  # lattice constant in angstroms
         c = 15.0  # vacuum spacing in the z direction for a monolayer
-        cell = [[a, 0, 0], [-a / 2, np.sqrt(3) / 2 * a, 0], [0, 0, c]]
+        cell = [
+            [self.cell[0, 0], self.cell[0, 1], 0],
+            [self.cell[1, 0], self.cell[1, 1], 0],
+            [0, 0, c],
+        ]
 
         band_path = bandpath(
             path=path, cell=cell, special_points=points, npoints=npoints
@@ -127,7 +174,7 @@ class TwistGraphite(object):
 
         e = []
         for kpt in tqdm(kpts):
-            e.append(np.linalg.eigvalsh(self.hamiltonian(kpt, kz=kz)))
+            e.append(np.linalg.eigvalsh(self.hamiltonian(kpt, kz=kz, p=p)))
         e = np.array(e)
 
         if ax is None:
@@ -147,7 +194,7 @@ class TwistGraphite(object):
     def fft(self, A):
         B = np.fft.fft2(A, axes=(0, 1))
         B = B[self.indx[0], self.indx[1]]
-        return B.flatten()
+        return B.flatten() / (self.M) ** 2
 
     def ifft(self, A):
         A = A.reshape((self.N, 2))
