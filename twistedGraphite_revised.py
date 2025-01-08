@@ -280,7 +280,7 @@ class TwistGraphite_LL(object):
     :param kx: Moire Brillouin zone kx.
     :param ky: Moire Brillouin zone ky.
     :param kz: vertical kz path in units of 2pi
-    :param p,q: Flux numerator. Flux per unit cell=p/q/6.
+    :param p,q: Flux per unit cell=phi_0 * q/p.
     :param max_l: maximal energy level to include in the Hamiltonian.
     ----------------------------------------------------------------------------------
     """
@@ -288,7 +288,7 @@ class TwistGraphite_LL(object):
     def __init__(self, theta=1.1) -> None:
        self.theta = np.deg2rad(theta)
        self.ktheta = kD * 2 * np.sin(self.theta/2)
-       self.thetadeg = theta
+       self.thetadeg = np.copy(theta)
        
     def fnm(self,zx, zy, n, m):
         z2 = zx ** 2 + zy ** 2
@@ -303,16 +303,11 @@ class TwistGraphite_LL(object):
 
     def hamiltonian(self,p: int,q: int,kz: float,max_l = 10,kx = 0,ky =0 ,sublat_pot = 0, layer_pot = 0):
         
-        h = np.zeros((p * (max_l + 1) * 2, p * (max_l + 1) * 2), dtype=np.complex128)
-
-        # magnetic parameters----code from git hub
-        # b = np.sqrt(3) / 8 / pi * self.ktheta ** 2 * p / abs(q)
-        # mag_l = b ** (-1 / 2)
+        h = np.zeros((q * (max_l + 1) * 2, q * (max_l + 1) * 2), dtype=np.complex128)
+        #replaced p with q
 
         #new bfield
-       
-        b = abs(q)/p * 8 * pi/(np.sqrt(3) * self.ktheta**2)#need to convert it to tesla with habr e converter above, here we have hbar/e = 1
-        
+        b = np.sqrt(3) / 8 / pi * self.ktheta ** 2 * q / abs(p)#need to convert it to tesla with habr e converter above, here we have hbar/e = 1
 
         mag_l = b ** (1 / 2)
     
@@ -322,26 +317,36 @@ class TwistGraphite_LL(object):
         phi = 2 * pi / 3
         exphi = np.exp(1j * phi)
 
-        T1 = np.array([[w1, w2], [w2, w1]], dtype=np.complex128)* np.exp(2j * pi * kz)
-        T2 = np.array([[w1 / exphi, w2], [w2 * exphi, w1 / exphi]])* np.exp(2j * pi * kz)
-        T3 = np.array([[w1 * exphi, w2], [w2 / exphi, w1 * exphi]])* np.exp(2j * pi * kz)
 
+        #-------------------- These are the T values as in the BM model just slightly changed -------------------
+        # T1 = np.array([[w1, w2], [w2, w1]], dtype=np.complex128)* np.exp(2j * pi * kz)
+        # T2 = np.array([[w1 / exphi, w2], [w2 * exphi, w1 / exphi]])* np.exp(2j * pi * kz)
+        # T3 = np.array([[w1 * exphi, w2], [w2 / exphi, w1 * exphi]])* np.exp(2j * pi * kz)
+
+        # ---------------------- let me try something with our oroginal T---------------AS in the  analysis 
+
+        T1 = np.array([[w1, w2], [w2, w1]], dtype=np.complex128)* np.exp(2j * pi * kz)
+        T2 = np.array([[w1 , w2 / exphi], [w2 * exphi, w1]])* np.exp(2j * pi * kz)
+        T3 = np.array([[w1 , w2 / (exphi**2)], [w2 * (exphi**2), w1]])* np.exp(2j * pi * kz)
 
         q1 = self.ktheta * np.array([0, -1])
         q2 = self.ktheta * np.array([np.sqrt(3), 1]) / 2
         q3 = self.ktheta * np.array([-np.sqrt(3), 1]) / 2
+
         z1 = q1 * mag_l / np.sqrt(2)
         z2 = q2 * mag_l / np.sqrt(2)
         z3 = q3 * mag_l / np.sqrt(2)
-        delta = 2 * pi * q / p / self.ktheta  # np.sqrt(3) * ktheta * mag_l ** 2 / 2
+
+        
+        delta =  4 * pi * p / q / self.ktheta  # 2 * pi * q / p / self.ktheta
         y0 = kx * mag_l ** 2
-        #ind = np.reshape(np.arange(p * 2 * (max_l + 1) * 2), (p, 2, (max_l + 1), 2)) old version with 2 layers
-        #--> new versions
-        ind = np.reshape(np.arange(p * (max_l + 1) * 2), (p, (max_l + 1), 2))
+        #--> new versions changed p to q in the reshape
+        ind = np.reshape(np.arange(q * (max_l + 1) * 2), (q, (max_l + 1), 2))
+        
         #----------- WE take out the layer for loops since there are no explicit dependance---------------
         # diagonal term
         for level in range(max_l):
-            for y in range(p):
+            for y in range(q):
                 # landau level energies
                 h[ind[y, level, 1], ind[y, level + 1, 0]] = -wc * np.exp(
                     1j * (-1) * self.theta / 2) * np.sqrt(level + 1.)
@@ -352,8 +357,10 @@ class TwistGraphite_LL(object):
                     ii = ind[y, level, sublat]
                     h[ii, ii] = (-1) ** sublat * sublat_pot -1 * layer_pot
 
-        for y in range(p):
+        for y in range(q):
             h[ind[y, max_l, 1], ind[y, max_l, 1]] = 1e4
+        
+        #I changed y in range 1,..,p to y in range 1,..,q
 
         # off-diagonal term
         # m,n are level indices
@@ -363,24 +370,24 @@ class TwistGraphite_LL(object):
             for n in range(max_l + 1):
                 for beta in range(2):
                     for alpha in range(2):
-                        for j in range(p):
+                        for j in range(q):
                             # top scattering
                             h[ind[j, m, beta], ind[j, n, alpha]] += \
                                 T1[alpha, beta] * self.fnm(z1[0], z1[1], n, m) * np.exp(
-                                    -1j * self.ktheta * y0 - 4j * pi * q * j / p)
+                                    -1j * self.ktheta * y0 - 4j * pi * p * j / q)
                             jp = np.mod(j + 1, q)
                             jm = np.mod(j - 1, q)
                             # right scattering
                             h[ind[j, m, beta], ind[jp, n, alpha]] += \
                                 T2[alpha, beta] * self.fnm(z2[0], z2[1], n, m) * np.exp(
-                                    1j * ky * delta + 1j / 2 * self.ktheta * y0 + 1j * pi * q / p * (2 * j - 1))
+                                    1j * ky * delta + 1j / 2 * self.ktheta * y0 + 1j * pi * p / q * (2 * j - 1))
                             # left scattering
                             h[ind[j, m, beta], ind[jm, n, alpha]] += \
                                 T3[alpha, beta] * self.fnm(z3[0], z3[1], n, m) * np.exp(
-                                    -1j * ky * delta + 1j / 2 * self.ktheta * y0 + 1j * pi * q / p * (2 * j + 1))
+                                    -1j * ky * delta + 1j / 2 * self.ktheta * y0 + 1j * pi * p / q * (2 * j + 1))
 
 
-       
+        #----------- I changed q/p to p/q to make sense with the rest + I changed the for loop from 1...p to 1...q to again make sens with the derivations
         h = h + np.transpose(np.conj(h))
         argnan = np.argwhere(np.isnan(h))
         if argnan.size > 0:
