@@ -309,7 +309,7 @@ class TwistGraphite_LL(object):
         #new bfield
         b = np.sqrt(3) / 8 / pi * self.ktheta ** 2 * q / abs(p)#need to convert it to tesla with habr e converter above, here we have hbar/e = 1
 
-        mag_l = b ** (1 / 2)
+        mag_l = b ** (-1 / 2)
     
         wc = np.sqrt(2) * vel / mag_l * m_s_angstrom_to_mev
 
